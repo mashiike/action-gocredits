@@ -1,0 +1,58 @@
+name: 'action-gocredits'
+description: 'Generate Credits for Golang with Songmu/gocredits'
+inputs:
+  version:
+    description: "A version to install Songmu/gocredits"
+    default: latest
+    required: false
+  github_token:
+    description: "The token used when calling GitHub API"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: install Songmu/gocredits
+      shell: bash
+      env:
+        github_token: ${{ inputs.github_token }}
+      run: |
+        set -e
+        VERSION="${{ inputs.version }}"
+        api_request_args=("-sS")
+        if [[ -n "$github_token" ]]; then
+          api_request_args=("${api_request_args[@]}" -H "authorization: token $github_token")
+        fi
+        if [ "${VERSION}" = "latest" ]; then
+          DOWNLOAD_URL=$(curl "${api_request_args[@]}" https://api.github.com/repos/Songmu/gocredits/releases | jq -r '[.[]|select(.prerelease==false)][0].assets[].browser_download_url|select(match("linux_amd64."))')
+        else
+          DOWNLOAD_URL=https://github.com/Songmu/gocredits/releases/download/${VERSION}/gocredits_${VERSION}_linux_amd64.tar.gz
+        fi
+        mkdir -p ${RUNNER_TOOL_CACHE}/gocredits
+        cd /tmp
+        curl -sfLO ${DOWNLOAD_URL}
+        FILENAME=$(basename $DOWNLOAD_URL .tar.gz)
+        tar xzvf ${FILENAME}.tar.gz
+        sudo install ${FILENAME}/gocredits ${RUNNER_TOOL_CACHE}/gocredits/gocredits
+
+        echo "Adding ${RUNNER_TOOL_CACHE}/gocredits to path..."
+        echo "${RUNNER_TOOL_CACHE}/gocredits" >> $GITHUB_PATH
+        "${RUNNER_TOOL_CACHE}/gocredits/gocredits" --version
+    - name: Run Songmu/gocredits
+      shell: bash
+      run: |
+        go mod download && gocredits -w -skip-missing .
+    - name: Count changes
+      shell: bash
+      id: changes
+      run: |
+          git add -N CREDITS
+          echo "count=$(git diff --name-only | wc -l)"  >> "$GITHUB_OUTPUT"
+    - name: Commit changes
+      shell: bash
+      run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -m "[gocredits] update CREDITS"
+          git push --set-upstream origin $(git rev-parse --abbrev-ref HEAD)
+      if: steps.changes.outputs.count > 0
